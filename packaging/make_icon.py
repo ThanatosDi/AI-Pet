@@ -18,12 +18,10 @@ def make_icon(out: Path) -> Path:
     from PySide6.QtGui import QImage, QPainter
     from PySide6.QtWidgets import QApplication
 
-    from ai_pet.app import BODY, GROUND, Pet
+    from ai_pet.app import BODY, GROUND, Manager, Pet
 
     app = QApplication.instance() or QApplication([])
-    pet = Pet()
-    pet._poll.stop()
-    pet._anim.stop()
+    pet = Pet(Manager(), 0)  # 不呼叫 Manager.start()，不會輪詢 session 或跑動畫
 
     size = 1024
     img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
