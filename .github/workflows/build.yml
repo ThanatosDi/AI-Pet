@@ -1,0 +1,66 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: AI-Pet-windows-x64
+          - os: macos-latest # Apple Silicon
+            artifact: AI-Pet-macos-arm64
+          - os: macos-15-intel # Intel Mac
+            artifact: AI-Pet-macos-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build
+        run: uv run pyinstaller packaging/ai_pet.spec --noconfirm
+
+      - name: Smoke test hook (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export AI_PET_HOME="$RUNNER_TEMP/ai-pet"
+          echo '{"hook_event_name":"Stop","session_id":"ci","cwd":"/tmp/ci"}' | "dist/AI Pet/AI Pet.exe" ai-pet-hook
+          grep -q '"done"' "$AI_PET_HOME/sessions/ci.json"
+
+      - name: Smoke test hook (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          export AI_PET_HOME="$RUNNER_TEMP/ai-pet"
+          echo '{"hook_event_name":"Stop","session_id":"ci","cwd":"/tmp/ci"}' | "dist/AI Pet.app/Contents/MacOS/AI Pet" ai-pet-hook
+          grep -q '"done"' "$AI_PET_HOME/sessions/ci.json"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/AI Pet" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        # ditto 會保留 .app 裡的符號連結與簽章
+        run: ditto -c -k --keepParent "dist/AI Pet.app" "${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}.zip

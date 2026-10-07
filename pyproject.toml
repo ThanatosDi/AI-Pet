@@ -1,0 +1,21 @@
+[project]
+name = "ai-pet"
+version = "0.1.0"
+description = "置頂桌面吉祥物，顯示 Claude Code 目前狀態"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["PySide6-Essentials>=6.7"]
+
+[project.scripts]
+ai-pet = "ai_pet.cli:main"
+ai-pet-hook = "ai_pet.hook:main"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pillow>=12.3.0",
+    "pyinstaller>=6.22.3",
+]
