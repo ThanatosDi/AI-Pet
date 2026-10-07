@@ -2,6 +2,9 @@
 
 置頂在桌面上的吉祥物，透過 Claude Code hooks 顯示 Claude Code 目前的狀態。支援 Windows / macOS / Linux（PySide6）。
 
+> [!NOTE]
+> 感謝 [@raychangSy](https://github.com/raychangSy) 提供的靈感, 但是他不開源才得以產生這個專案 🤪
+
 | 狀態 | 觸發事件 | 吉祥物 |
 |---|---|---|
 | 待命 | `SessionStart`、閒置提醒 | 呼吸、眨眼 |
