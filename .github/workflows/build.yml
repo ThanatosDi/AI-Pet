@@ -19,9 +19,9 @@ jobs:
             artifact: AI-Pet-macos-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
 
       - name: Install dependencies
         run: uv sync --locked
@@ -54,7 +54,7 @@ jobs:
         # ditto 會保留 .app 裡的符號連結與簽章
         run: ditto -c -k --keepParent "dist/AI Pet.app" "${{ matrix.artifact }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
@@ -64,16 +64,16 @@ jobs:
   release:
     needs: build
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*.zip
           generate_release_notes: true
