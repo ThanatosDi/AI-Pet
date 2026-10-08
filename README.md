@@ -1,4 +1,5 @@
 # AI Pet
+<img width="155" height="190" alt="image" src="https://github.com/user-attachments/assets/8ee6fb48-4054-4c10-a474-9ff165f8b840" />
 
 置頂在桌面上的吉祥物，透過 Claude Code hooks 顯示 Claude Code 目前的狀態。支援 Windows / macOS / Linux（PySide6）。
 
