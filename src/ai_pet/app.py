@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import signal
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -83,6 +84,25 @@ def _pen(color: QColor, width: float) -> QPen:
     return QPen(color, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
 
 
+# 提示音：完成與等待確認用不同聲音；macOS 用系統音效，其他平台用系統提示音
+SOUNDS = {
+    "done": "/System/Library/Sounds/Glass.aiff",
+    "waiting": "/System/Library/Sounds/Funk.aiff",
+}
+
+
+def _play(state: str) -> None:
+    if sys.platform == "darwin" and Path(SOUNDS[state]).is_file():
+        try:
+            subprocess.Popen(
+                ["afplay", SOUNDS[state]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return
+        except OSError:
+            pass
+    QApplication.beep()
+
+
 OFFLINE = ""  # 沒有任何 session 時那隻睡覺吉祥物的 key（session id 不會是空字串）
 SINGLE = "*"  # 只顯示一隻時那隻的 key（session id 經過 _safe_id，不會有 *）
 
@@ -106,6 +126,8 @@ class Manager(QObject):
         self._cfg_mtime = 0.0
         cfg = self.load_config()
         self.multi = cfg.get("multi", True) is not False
+        self.sound = cfg.get("sound", True) is not False
+        self._states: dict[str, str] | None = None  # 上一輪各 session 的狀態，用來偵測轉換
         self._apply_look(cfg)
 
         self._poll = QTimer(self, interval=300)
@@ -126,6 +148,7 @@ class Manager(QObject):
     def refresh(self) -> None:
         self._watch_config()
         sessions = sorted(st.load_sessions(), key=lambda s: s.ts)
+        self._chime(sessions)
         if not sessions:
             wanted: dict[str, st.Session | None] = {OFFLINE: None}
         elif self.multi:
@@ -156,6 +179,22 @@ class Manager(QObject):
             pet = self.pets.pop(key)
             pet.close()
             pet.deleteLater()
+
+    def _chime(self, sessions: list[st.Session]) -> None:
+        """有 session 剛轉成完成或等待確認時播一次提示音（同一輪多個只播一次，等待確認優先）。"""
+        prev = self._states
+        self._states = {s.id: s.state for s in sessions}
+        if prev is None or not self.sound:
+            return  # 剛啟動時不要對既有狀態響
+        changed = {s.state for s in sessions if s.id in prev and prev[s.id] != s.state}
+        for state in ("waiting", "done"):
+            if state in changed:
+                _play(state)
+                return
+
+    def set_sound(self, sound: bool) -> None:
+        self.sound = sound
+        self.update_config(sound=None if sound else False)
 
     def set_multi(self, multi: bool) -> None:
         self.multi = multi
@@ -228,6 +267,7 @@ class Manager(QObject):
             pass
         self._look = (cfg.get("mascot"), cfg.get("image"))
         self.multi = cfg.get("multi", True) is not False
+        self.sound = cfg.get("sound", True) is not False
 
     def _apply_look(self, cfg: dict) -> None:
         """套用設定裡記錄的造型；找不到時暫時顯示預設吉祥物，但保留紀錄。"""
@@ -255,6 +295,7 @@ class Manager(QObject):
         if mtime != self._cfg_mtime:
             self._cfg_mtime = mtime
             self.multi = cfg.get("multi", True) is not False
+            self.sound = cfg.get("sound", True) is not False
             self._apply_look(cfg)
 
     # ---------- 造型 ----------
@@ -622,6 +663,10 @@ class Pet(QWidget):
         multi.setChecked(mgr.multi)
         multi.toggled.connect(mgr.set_multi)
         settings.addAction("全部回到預設位置" if mgr.multi else "回到預設位置", mgr.reset_positions)
+        sound = settings.addAction("完成／等待確認時播放提示音")
+        sound.setCheckable(True)
+        sound.setChecked(mgr.sound)
+        sound.toggled.connect(mgr.set_sound)
         settings.addSeparator()
         hook_status = install.status()
         label = {
