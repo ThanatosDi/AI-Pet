@@ -98,7 +98,7 @@ uv run pyinstaller packaging/ai_pet.spec --noconfirm
 
 - Windows：產出 `dist/AI Pet/`，把整個資料夾壓縮後發佈，執行 `AI Pet.exe`。
 - macOS：產出 `dist/AI Pet.app`，用 `ditto -c -k --keepParent "dist/AI Pet.app" AI-Pet.zip` 壓縮。App 不會出現在 Dock，只有桌面上的吉祥物。
-- PyInstaller 不能跨平台打包。推送 `v*` 標籤或手動執行 GitHub Actions 的 `build` workflow，會在 Windows、macOS（Apple Silicon、Intel）各打包一份並上傳。
+- PyInstaller 不能跨平台打包。推送 `v*` 標籤或手動執行 GitHub Actions 的 `build` workflow，會在 Windows、macOS（Apple Silicon）各打包一份並上傳。不提供 Intel Mac 版（live2d-py 只支援 macOS 26 以上，GitHub Actions 的 Intel Mac 環境沒有這個版本，打出來會缺少 Live2D）。
 
 打包版的使用者不需要終端機：第一次啟動會詢問是否連接 Claude Code（寫入 hooks），之後也能從右鍵 →「設定」→「連接 Claude Code」切換。hook 指令會指向 App 本身（`"<App 路徑>" ai-pet-hook`），所以 **App 搬家後要重新連接**，選單會顯示「重新連接 Claude Code（原本的連接已失效）」。
 

@@ -15,8 +15,6 @@ jobs:
             artifact: AI-Pet-windows-x64
           - os: macos-latest # Apple Silicon
             artifact: AI-Pet-macos-arm64
-          - os: macos-15-intel # Intel Mac
-            artifact: AI-Pet-macos-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
