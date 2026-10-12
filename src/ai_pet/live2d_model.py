@@ -296,29 +296,52 @@ def display_names(model_json: Path) -> dict[str, tuple[str, str]]:
     }
 
 
+_gl = None  # 所有渲染器共用的 (OpenGL context, offscreen surface)
+
+
+def _gl_context():
+    """建立（第一次）並回傳共用的 OpenGL context。
+
+    live2d-py 的 shader 是全域的，建在呼叫 glInit 時的 context 裡；另開 context 的模型會畫不出來。
+    渲染都在主執行緒依序進行，所有模型共用一個 context、各自用自己的 framebuffer 即可。
+    """
+    global _gl
+    if _gl is not None:
+        return _gl
+    from PySide6.QtGui import QOffscreenSurface, QOpenGLContext, QSurfaceFormat
+
+    fmt = QSurfaceFormat()
+    fmt.setAlphaBufferSize(8)
+    ctx = QOpenGLContext()
+    ctx.setFormat(fmt)
+    if not ctx.create():
+        raise Live2DError("無法建立 OpenGL（遠端桌面或部分虛擬機不支援）")
+    surface = QOffscreenSurface()
+    surface.setFormat(ctx.format())
+    surface.create()
+    if not ctx.makeCurrent(surface):
+        raise Live2DError("無法使用 OpenGL")
+    try:
+        with _keep_std_fds():
+            _live2d.init()
+            _live2d.glInit()
+    finally:
+        ctx.doneCurrent()
+    _gl = (ctx, surface)
+    return _gl
+
+
 class Live2DRenderer:
     def __init__(self, model_json: Path):
         if not available():
             raise Live2DError(f"Live2D 函式庫無法載入（{_import_error}）")
-        from PySide6.QtGui import QOffscreenSurface, QOpenGLContext, QSurfaceFormat
-
         cached = prepare(model_json)
         self.source = model_json
-        fmt = QSurfaceFormat()
-        fmt.setAlphaBufferSize(8)
-        self.ctx = QOpenGLContext()
-        self.ctx.setFormat(fmt)
-        if not self.ctx.create():
-            raise Live2DError("無法建立 OpenGL（遠端桌面或部分虛擬機不支援）")
-        self.surface = QOffscreenSurface()
-        self.surface.setFormat(self.ctx.format())
-        self.surface.create()
+        self.ctx, self.surface = _gl_context()
         if not self.ctx.makeCurrent(self.surface):
             raise Live2DError("無法使用 OpenGL")
         try:
             with _keep_std_fds():
-                _live2d.init()
-                _live2d.glInit()
                 self.model = _live2d.Model()
                 self.model.LoadModelJson(str(cached))
             self.model.SetAutoBlink(False)  # 眨眼自己控制，各狀態的眼睛開合才不會被蓋掉
@@ -516,11 +539,11 @@ class Live2DRenderer:
     def close(self) -> None:
         if self.ctx is None:
             return
+        # context 是共用的，不銷毀；只在它是 current 時釋放這個模型的貼圖與 framebuffer
         if self.ctx.makeCurrent(self.surface):
             self.model = None
             self.fbo = None
             self.ctx.doneCurrent()
-        self.surface.destroy()
         self.ctx = None
         self.last_image = None
 
