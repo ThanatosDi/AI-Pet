@@ -19,16 +19,35 @@ PLACEHOLDER = """\
 可用的狀態：待命、思考中、工作中、需要確認、完成、整理記憶、睡覺"""
 
 
-class MascotDialog(QDialog):
-    """選完圖片後：輸入各狀態的動作，選擇要讓 Claude 畫，還是直接用圖片。"""
+DRAW_NOTE = "Claude Code 會參考這張圖重畫成向量吉祥物並加上動畫，約需 1–5 分鐘，會使用你的 Claude 訂閱額度。"
+LIVE2D_NOTE = (
+    "Claude Code 會先看過模型每個參數的效果，再寫出各狀態的動作檔（模型資料夾裡的 aipet.json，"
+    "原本的檔案會備份成 aipet.json.bak），約需 1–3 分鐘，會使用你的 Claude 訂閱額度。"
+)
 
-    def __init__(self, image: Path, actions: str = "", parent: QWidget | None = None, allow_plain: bool = True):
+
+class MascotDialog(QDialog):
+    """輸入各狀態想要的動作，再選擇要讓 Claude 產生，或另一個選項（直接用圖片 / 還原內建動作）。
+
+    choice 結果："claude" 或 "secondary"。
+    """
+
+    def __init__(
+        self,
+        image: Path | QPixmap,
+        actions: str = "",
+        parent: QWidget | None = None,
+        secondary: str | None = "直接使用圖片",
+        primary: str = "用 Claude 畫成會動的吉祥物",
+        note: str = DRAW_NOTE,
+        title: str = "設定吉祥物",
+    ):
         super().__init__(parent, Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.setWindowTitle("設定吉祥物")
-        self.choice: str | None = None  # "claude" / "image"
+        self.setWindowTitle(title)
+        self.choice: str | None = None
 
         preview = QLabel()
-        pix = QPixmap(str(image))
+        pix = image if isinstance(image, QPixmap) else QPixmap(str(image))
         if not pix.isNull():
             preview.setPixmap(pix.scaled(160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         preview.setAlignment(Qt.AlignCenter)
@@ -38,21 +57,17 @@ class MascotDialog(QDialog):
         self.text.setMinimumSize(420, 200)
 
         has_claude = find_claude() is not None
-        note = QLabel(
-            "Claude Code 會參考這張圖重畫成向量吉祥物並加上動畫，約需 1–5 分鐘，會使用你的 Claude 訂閱額度。"
-            if has_claude
-            else "找不到 claude 指令，無法用 Claude 繪製。請先安裝 Claude Code。"
-        )
+        note = QLabel(note if has_claude else "找不到 claude 指令，無法使用 Claude。請先安裝 Claude Code。")
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
 
-        draw = QPushButton("用 Claude 畫成會動的吉祥物")
+        draw = QPushButton(primary)
         draw.setDefault(True)
         draw.setEnabled(has_claude)
         draw.clicked.connect(lambda: self._done("claude"))
-        plain = QPushButton("直接使用圖片")
-        plain.clicked.connect(lambda: self._done("image"))
-        plain.setVisible(allow_plain)
+        plain = QPushButton(secondary or "")
+        plain.clicked.connect(lambda: self._done("secondary"))
+        plain.setVisible(secondary is not None)
         cancel = QPushButton("取消")
         cancel.clicked.connect(self.reject)
 

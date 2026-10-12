@@ -29,6 +29,19 @@
 
 App 只讀取 Claude 產生的 SVG 和 JSON，不會執行它產生的程式碼。執行 `claude -p` 時只開放 Read、Write、Edit 三個工具，工作目錄是 `~/.ai-pet/mascots/<時間>/`，這次執行也不會觸發吉祥物的 hook。
 
+### Live2D 模型（VTube Studio）
+
+把 VTube Studio 的模型資料夾（裡面有 `*.model3.json`）整個放進 `~/.ai-pet/Live2DModels/`，再從右鍵 →「設定」→「切換吉祥物」選擇。選單也有「開啟 Live2D 模型資料夾」。
+
+- VTube Studio 模型通常沒有動作檔（平常靠臉部追蹤），AI Pet 依狀態控制標準參數：頭部與身體角度、眼睛開合與笑眼、眼珠、眉毛、嘴巴，以及 VTube Studio 常見的手部參數（例如等待確認時舉手揮動、工作中雙手輪流敲鍵盤）。頭髮、耳朵等由模型自己的物理效果帶動。
+- 只支援 Cubism 3 以上的模型（`.moc3`）。
+- **自訂動作**：選用 Live2D 模型後，右鍵 →「設定」→「設定 Live2D 動作…」，描述各狀態想要的動作（例如「需要確認時耳朵一直晃並舉右手揮動」），Claude Code 會先看過模型每個參數的實際效果，再寫出動作檔 `aipet.json`，放在模型資料夾裡（原本的檔案備份成 `aipet.json.bak`），約 1 分鐘。之後可以再次修改，或選「還原成內建動作」。沒定義的狀態使用內建動作。也可以在 Claude Code 裡用 `live2d-motion` skill，會看預覽圖再修正，品質通常比較好。
+- `aipet.json` 的波形語法和 `rig.json` 相同，直接驅動模型參數；格式見 `uv run ai-pet live2d spec`。改完存檔，執行中的吉祥物一秒內就會套用。
+- 需要安裝可選套件：開發版 `uv sync --extra live2d`，或 `uv tool install ".[live2d]"`；GitHub Actions 打包的版本已經包含（`live2d-py` 只支援 macOS 26 以上，較舊的 macOS 版本不含 Live2D）。沒安裝時選單會顯示「未安裝 Live2D 支援」，其他功能照常。
+- 資源用量（Windows、NVIDIA 顯示卡實測）：記憶體約多 90 MB（其中約 50 MB 是 OpenGL 驅動），CPU 約單核 1–3%。只有選用 Live2D 模型時才會載入；貼圖會縮到 1024 並快取在 `~/.ai-pet/cache/live2d/`，待命時每秒 15 幀、睡覺時每秒 8 幀。
+- 沒有 OpenGL 的環境（遠端桌面、部分虛擬機）會自動改用預設吉祥物。
+- Live2D 函式庫內含 Live2D 官方的 Cubism Core，使用與再發佈需遵守 [Live2D Proprietary Software License](https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html)；模型本身也有各自的授權。
+
 ### 在 Claude Code 裡用 skill 繪製
 
 專案內附 `draw-mascot` skill（`.claude/skills/draw-mascot/`）。在這個專案目錄開 Claude Code，輸入：
@@ -48,6 +61,12 @@ skill 用到的指令（也可以手動使用）：
 | `uv run ai-pet validate <資料夾>` | 檢查格式，七個狀態都要定義 |
 | `uv run ai-pet preview <資料夾>` | 把各狀態在不同時間點的樣子畫成 `preview.png` |
 | `uv run ai-pet use <資料夾>` | 切換造型，執行中的吉祥物會自動套用 |
+| `uv run ai-pet live2d list` | 列出 `Live2DModels` 裡的模型 |
+| `uv run ai-pet live2d info <模型>` | 印出模型所有參數（ID、作者取的名稱、範圍、預設值） |
+| `uv run ai-pet live2d sheet <模型>` | 每個參數在最小 / 最大值時的對照圖 |
+| `uv run ai-pet live2d preview <模型>` | 各狀態動作的預覽圖 |
+| `uv run ai-pet live2d validate <模型>` | 檢查模型資料夾裡的 `aipet.json` |
+| `uv run ai-pet live2d use <模型>` | 切換到這個 Live2D 模型 |
 
 ## 安裝
 
@@ -96,10 +115,10 @@ uv run ai-pet clear
 
 ## 資料位置
 
-`~/.ai-pet/`（可用環境變數 `AI_PET_HOME` 覆蓋）：`sessions/*.json` 是各 session 狀態，`config.json` 存視窗位置和目前使用的吉祥物，`mascots/` 是 Claude 畫的吉祥物（原圖、動作描述、`mascot.svg`、`rig.json`）。
+`~/.ai-pet/`（可用環境變數 `AI_PET_HOME` 覆蓋）：`sessions/*.json` 是各 session 狀態，`config.json` 存視窗位置和目前使用的吉祥物，`mascots/` 是 Claude 畫的吉祥物（原圖、動作描述、`mascot.svg`、`rig.json`），`Live2DModels/` 放 Live2D 模型，`cache/` 是 Live2D 貼圖快取。
 
 ## 已知限制
 
 - Linux Wayland：部分 compositor 不允許程式自己置頂或記住位置（GNOME 尤其如此），X11 正常。
 - 按 Esc 中斷或遇到 API 錯誤時 Claude Code 不會觸發 `Stop`，吉祥物會讀對話紀錄偵測，約 2 秒後回到待命。
-- 狀態不對時可以查 `~/.ai-pet/events.log`，每次 hook 觸發都會記一行（時間、session、事件、寫入的狀態）。
+- 狀態不對時可以查 `~/.ai-pet/events.log`，每次 hook 觸發都會記一行（時間、session、事件、寫入的狀態）。吉祥物每次啟動時會清空，只保留這次執行的紀錄。

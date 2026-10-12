@@ -24,7 +24,9 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0（此專案不提供 v10 這種大版本 tag）
 
       - name: Install dependencies
-        run: uv sync --locked
+        # Live2D 是可選功能；live2d-py 沒有該平台的版本時（例如 macOS 26 以前）就不包含
+        shell: bash
+        run: uv sync --locked --extra live2d || uv sync --locked
 
       - name: Build
         run: uv run pyinstaller packaging/ai_pet.spec --noconfirm

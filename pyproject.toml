@@ -4,11 +4,18 @@ version = "0.1.0"
 description = "置頂桌面吉祥物，顯示 Claude Code 目前狀態"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["PySide6-Essentials>=6.7"]
+dependencies = [
+    "PySide6-Essentials>=6.7",
+]
 
 [project.scripts]
 ai-pet = "ai_pet.cli:main"
 ai-pet-hook = "ai_pet.hook:main"
+
+[project.optional-dependencies]
+live2d = [
+    "live2d-py>=1.0 ; python_full_version >= '3.11'",
+]
 
 [build-system]
 requires = ["uv_build>=0.8,<0.13"]

@@ -2,24 +2,33 @@
 name: draw-mascot
 description: 把使用者提供的圖片畫成 AI Pet 桌面吉祥物（分部件的 mascot.svg + 各狀態動畫 rig.json），驗證、預覽檢查後套用到執行中的吉祥物。使用者想換吉祥物造型、用圖片做吉祥物、或調整吉祥物各狀態的動作時使用。
 argument-hint: <圖片路徑> [各狀態想要的動作]
-allowed-tools: Read, Write, Edit, Bash(uv run ai-pet spec), Bash(uv run ai-pet new:*), Bash(uv run ai-pet validate:*), Bash(uv run ai-pet preview:*), Bash(uv run ai-pet use:*)
+allowed-tools: Read, Write, Edit, Bash(uv run ai-pet spec), Bash(uv run ai-pet new:*), Bash(uv run ai-pet validate:*), Bash(uv run ai-pet preview:*), Bash(uv run ai-pet use:*), Bash(*AI Pet* spec), Bash(*AI Pet* new *), Bash(*AI Pet* validate *), Bash(*AI Pet* preview *), Bash(*AI Pet* use *)
 ---
 
 # 繪製 AI Pet 吉祥物
 
 使用者輸入：$ARGUMENTS
 
-所有指令都在本專案根目錄執行（有 `pyproject.toml` 的那層）。
+## 執行指令的方式
+
+下面步驟裡的 `ai-pet …` 依環境換成以下其中一種，整個流程固定用同一種：
+
+- **原始碼專案**：目前目錄有 AI Pet 的 `pyproject.toml`，而且有 `uv` → 在專案根目錄執行 `uv run ai-pet …`。
+- **打包版 App**：不在原始碼專案裡、或沒有 `uv` → 直接呼叫 App 的執行檔，參數相同：
+  - Windows：`"<資料夾>/AI Pet/AI Pet.exe" …`
+  - macOS：`"<位置>/AI Pet.app/Contents/MacOS/AI Pet" …`（不能用 `open`，它傳不了參數也拿不到輸出）
+
+  執行檔位置：讀 `~/.claude/settings.json`，AI Pet 的 hook 指令是 `"<執行檔路徑>" ai-pet-hook`，引號裡就是路徑。找不到 hook、或路徑已不存在，就問使用者 App 放在哪裡。執行檔回報不認得子指令（`invalid choice`）代表 App 版本太舊，請使用者更新。
 
 ## 步驟
 
 1. **確認輸入**：從使用者輸入取出圖片路徑和動作描述。沒有圖片路徑就先問使用者；動作描述可以沒有，沒提到的狀態用規格裡的預設動作。
 
-2. **讀規格**：執行 `uv run ai-pet spec`，完整讀完。`mascot.svg` 和 `rig.json` 必須完全照這份規格寫，App 的驗證器也照它檢查。
+2. **讀規格**：執行 `ai-pet spec`，完整讀完。`mascot.svg` 和 `rig.json` 必須完全照這份規格寫，App 的驗證器也照它檢查。
 
 3. **建立資料夾**：
    ```bash
-   uv run ai-pet new "<圖片路徑>" --actions "<動作描述，沒有就省略此參數>"
+   ai-pet new "<圖片路徑>" --actions "<動作描述，沒有就省略此參數>"
    ```
    輸出的最後一行是資料夾路徑，裡面有原圖副本 `source.*`。之後所有檔案都寫在這個資料夾。
 
@@ -30,9 +39,9 @@ allowed-tools: Read, Write, Edit, Bash(uv run ai-pet spec), Bash(uv run ai-pet n
    - 每個要動的部位、每種替換表情（閉眼、開心眼、驚訝嘴…）都做成獨立的最上層 `<g id>`。
    - 使用者描述的動作優先；七個狀態都要定義。
 
-6. **驗證**：`uv run ai-pet validate "<資料夾>"`。沒印出 `OK` 就依錯誤訊息修正，直到通過。
+6. **驗證**：`ai-pet validate "<資料夾>"`。沒印出 `OK` 就依錯誤訊息修正，直到通過。
 
-7. **預覽檢查**：`uv run ai-pet preview "<資料夾>"`，用 Read 看輸出的 `preview.png`。每一列是一個狀態，每一欄是不同時間點。逐項確認：
+7. **預覽檢查**：`ai-pet preview "<資料夾>"`，用 Read 看輸出的 `preview.png`。每一列是一個狀態，每一欄是不同時間點。逐項確認：
    - 像不像原圖的角色，比例、顏色對不對
    - 部件有沒有錯位、穿幫（例如旋轉時手和身體分離、轉軸 origin 設錯）
    - 每個狀態的動作有沒有做出使用者要的效果，相鄰時間點之間看得出在動
@@ -41,6 +50,6 @@ allowed-tools: Read, Write, Edit, Bash(uv run ai-pet spec), Bash(uv run ai-pet n
 
    有問題就修改後重新驗證、預覽。最多修三輪，還有無法解決的問題就如實告訴使用者。
 
-8. **套用**：`uv run ai-pet use "<資料夾>"`。執行中的吉祥物會在一秒內換上新造型；吉祥物沒在執行的話，下次啟動時生效。
+8. **套用**：`ai-pet use "<資料夾>"`。執行中的吉祥物會在一秒內換上新造型；吉祥物沒在執行的話，下次啟動時生效。
 
 9. **回報**：告訴使用者資料夾位置、各狀態做了什麼動作，以及右鍵 →「設定」→「切換吉祥物」可以換回預設或以前畫過的造型。
