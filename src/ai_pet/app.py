@@ -41,7 +41,7 @@ from .dialogs import LIVE2D_NOTE, MascotDialog
 from .generate import Generator, Live2DMotionJob
 from .rig import Rig, RigError
 
-W, H = 220, 220  # 腳底下留空間放 session 名稱與繪製進度
+W, H = 220, 228  # 腳底下留空間放 session 名稱與繪製進度
 GROUND = 182  # 腳底的 y 座標
 IMG_W, IMG_H = 150, 124  # 自訂圖片的最大顯示範圍（泡泡下方到地面）
 L2D_W, L2D_H = 180, 140  # Live2D 模型的顯示範圍；人物通常比較高，比圖片多用一點高度
@@ -923,16 +923,16 @@ class Pet(QWidget):
         if not self.label:
             return
         f = QFont()
-        f.setPixelSize(10)
+        f.setPixelSize(16)
         p.setFont(f)
         fm = QFontMetrics(f)
         more = f"  +{len(self.others) - 1}" if len(self.others) > 1 else ""  # 只顯示一隻時，其他 session 數
         text = fm.elidedText(self.label, Qt.ElideMiddle, W - 30 - fm.horizontalAdvance(more)) + more
         w = fm.horizontalAdvance(text) + 14
-        r = QRectF((W - w) / 2, GROUND + 6, w, 15)
+        r = QRectF((W - w) / 2, GROUND + 6, w, 22)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(43, 33, 24, 180))
-        p.drawRoundedRect(r, 7, 7)
+        p.drawRoundedRect(r, 11, 11)
         p.setPen(QColor("white"))
         p.drawText(r, Qt.AlignCenter, text)
 
