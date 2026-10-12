@@ -5,6 +5,10 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  # Windows runner 的主控台編碼是 cp1252，打包設定印中文會 UnicodeEncodeError
+  PYTHONUTF8: "1"
+
 jobs:
   build:
     strategy:
