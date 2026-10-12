@@ -182,7 +182,7 @@ def prepare(model_json: Path) -> Path:
         except OSError as e:
             raise Live2DError(f"模型缺少檔案：{rel}") from e
         h.update(f"{rel}:{s.st_size}:{s.st_mtime_ns}".encode())
-    h.update(str(MAX_TEXTURE).encode())
+    h.update(f"{MAX_TEXTURE}:2".encode())  # 冒號後是快取格式版本，改了寫法就加一，舊快取才會重建
     cache = st.home() / "cache" / "live2d" / h.hexdigest()[:16]
     target = cache / model_json.name
     if (cache / ".ready").exists():
@@ -203,7 +203,8 @@ def prepare(model_json: Path) -> Path:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not img.save(str(dst), "PNG"):
             raise Live2DError(f"無法寫入快取：{dst}")
-    target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    # 要有換行：macOS 版 live2d-py 讀到整份寫在同一行的 model3.json 會 segfault
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     (cache / ".ready").write_text("", encoding="utf-8")
     return target
 
