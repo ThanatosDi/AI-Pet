@@ -126,6 +126,88 @@ def _turn_aborted(transcript: str) -> bool:
     return aborted
 
 
+# ---------- session 名稱 ----------
+# Claude Code 把名稱寫在對話紀錄裡，而且會重複寫入新的版本：
+#   {"type":"custom-title","customTitle":"..."}  使用者用 /rename 取的名字
+#   {"type":"ai-title","aiTitle":"..."}          Claude 自動產生的標題
+# 對話紀錄可能有好幾十 MB，第一次從頭讀，之後只讀新增的部分。
+
+_TITLE_KEYS = ((b'"type":"custom-title"', "customTitle"), (b'"type":"ai-title"', "aiTitle"))
+_title_cache: dict[str, list] = {}  # 路徑 -> [已讀到的位置, customTitle, aiTitle]
+
+
+def session_title(transcript: str) -> str:
+    """回傳 session 名稱（自訂名稱優先），還沒有名稱時回傳空字串。"""
+    if not transcript:
+        return ""
+    try:
+        size = os.path.getsize(transcript)
+    except OSError:
+        return ""
+    entry = _title_cache.get(transcript)
+    if entry is None or size < entry[0]:  # 檔案變小代表被重寫，從頭讀
+        entry = _title_cache[transcript] = [0, "", ""]
+    if size > entry[0]:
+        try:
+            with open(transcript, "rb") as f:
+                f.seek(entry[0])
+                data = f.read(size - entry[0])
+        except OSError:
+            data = b""
+        # 只處理到最後一個換行，寫到一半的那行留到下次
+        end = data.rfind(b"\n") + 1
+        for line in data[:end].splitlines():
+            for i, (marker, field) in enumerate(_TITLE_KEYS):
+                if marker in line:
+                    try:
+                        title = json.loads(line).get(field)
+                    except ValueError:
+                        continue
+                    if isinstance(title, str) and title.strip():
+                        entry[1 + i] = " ".join(title.split())
+        entry[0] += end
+    return entry[1] or entry[2]
+
+
+# 執行中的 Claude Code 會在 ~/.claude/sessions/<pid>.json 登記自己，/rename 後立即更新 name。
+# nameSource 是 derived / collision 時 name 只是「資料夾-編號」，不當成名稱。
+_registry_cache: dict[Path, tuple[float, str, str]] = {}  # 檔案 -> (mtime, session id, 名稱)
+
+
+def _claude_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def registered_names() -> dict[str, str]:
+    """{session 狀態檔的 id: 使用者取的名稱}"""
+    names: dict[str, str] = {}
+    seen = set()
+    try:
+        files = list((_claude_dir() / "sessions").glob("*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        seen.add(f)
+        try:
+            mtime = f.stat().st_mtime
+            cached = _registry_cache.get(f)
+            if cached is None or cached[0] != mtime:
+                raw = json.loads(f.read_text(encoding="utf-8"))
+                name = raw.get("name") if raw.get("nameSource") not in (None, "derived", "collision") else ""
+                cached = _registry_cache[f] = (
+                    mtime,
+                    _safe_id(str(raw.get("sessionId", ""))),
+                    " ".join(name.split()) if isinstance(name, str) else "",
+                )
+        except (OSError, ValueError, AttributeError):
+            continue
+        if cached[2]:
+            names[cached[1]] = cached[2]
+    for f in set(_registry_cache) - seen:
+        del _registry_cache[f]
+    return names
+
+
 # ---------- 設定檔 ----------
 # config.json 內容：
 #   x, y     視窗位置
@@ -210,6 +292,8 @@ class Session:
     project: str
     ts: float
     transcript: str = ""
+    cwd: str = ""
+    title: str = ""  # session 名稱（/rename 或 Claude 自動產生），還沒有時是空字串
 
 
 @dataclass
@@ -244,6 +328,7 @@ def load_sessions(now: float | None = None) -> list[Session]:
     out: list[Session] = []
     if not d.is_dir():
         return out
+    names = registered_names()
     for f in d.glob("*.json"):
         try:
             raw = json.loads(f.read_text(encoding="utf-8"))
@@ -267,6 +352,8 @@ def load_sessions(now: float | None = None) -> list[Session]:
                 project=str(raw.get("project", "")),
                 ts=ts,
                 transcript=transcript,
+                cwd=str(raw.get("cwd", "")),
+                title=names.get(f.stem) or session_title(transcript),
             )
         )
     return out
