@@ -86,6 +86,14 @@ def log_event(session_id: str, event: str, result: str) -> None:
         pass
 
 
+def clear_event_log() -> None:
+    """App 啟動時清空 events.log，只保留這次執行的事件。"""
+    try:
+        (home() / "events.log").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # ---------- 偵測沒有正常結束的回合 ----------
 # 按 Esc 中斷或 API 錯誤時 Claude Code 不會觸發 Stop，狀態會停在 thinking / working。
 # 讀對話紀錄（transcript）最後一筆對話，若是中斷或錯誤訊息，就當成已經結束。

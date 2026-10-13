@@ -35,15 +35,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import install
+from . import install, live2d_model, live2d_motion
 from . import state as st
-from .dialogs import MascotDialog
-from .generate import Generator
+from .dialogs import LIVE2D_NOTE, MascotDialog
+from .generate import Generator, Live2DMotionJob
 from .rig import Rig, RigError
 
-W, H = 220, 220  # 腳底下留空間放 session 名稱與繪製進度
+W, H = 220, 228  # 腳底下留空間放 session 名稱與繪製進度
 GROUND = 182  # 腳底的 y 座標
 IMG_W, IMG_H = 150, 124  # 自訂圖片的最大顯示範圍（泡泡下方到地面）
+L2D_W, L2D_H = 180, 140  # Live2D 模型的顯示範圍；人物通常比較高，比圖片多用一點高度
 BODY = QColor("#D97757")
 INK = QColor("#2B2118")
 ALERT = QColor("#E5484D")
@@ -120,9 +121,15 @@ class Manager(QObject):
         self.image: QPixmap | None = None
         self.movie: QMovie | None = None
         self.rig: Rig | None = None
+        # Live2D 渲染器保存參數平滑與物理狀態，不能讓狀態不同的吉祥物共用：
+        # self.l2d 是主渲染器（載入檢查、選單資訊用，並借給一隻吉祥物畫），其他吉祥物各自建立
+        self.l2d: live2d_model.Live2DRenderer | None = None
+        self.l2d_gen = 0  # 換模型時加一，吉祥物看到不同就換掉自己的渲染器
+        self._l2d_lent = False
+        self._l2d_error = ""
         self.generator: Generator | None = None
         self._thumbs: dict[tuple[str, float], QIcon] = {}
-        self._look: tuple = (None, None)  # 目前套用的 (mascot, image) 設定
+        self._look: tuple = (None, None, None)  # 目前套用的 (live2d, mascot, image) 設定
         self._cfg_mtime = 0.0
         cfg = self.load_config()
         self.multi = cfg.get("multi", True) is not False
@@ -265,24 +272,29 @@ class Manager(QObject):
             self._cfg_mtime = st.config_path().stat().st_mtime
         except OSError:
             pass
-        self._look = (cfg.get("mascot"), cfg.get("image"))
+        self._look = (cfg.get("live2d"), cfg.get("mascot"), cfg.get("image"))
         self.multi = cfg.get("multi", True) is not False
         self.sound = cfg.get("sound", True) is not False
 
     def _apply_look(self, cfg: dict) -> None:
         """套用設定裡記錄的造型；找不到時暫時顯示預設吉祥物，但保留紀錄。"""
-        look = (cfg.get("mascot"), cfg.get("image"))
+        look = (cfg.get("live2d"), cfg.get("mascot"), cfg.get("image"))
         if look == self._look:
             return
         self._look = look
-        if look[0]:
-            if self.set_rig(look[0]):
+        l2d, mascot, image = look
+        if l2d:
+            if self.set_live2d(l2d):
                 return
-            print(f"ai-pet：找不到或無法載入造型 {look[0]}，改用預設吉祥物", file=sys.stderr)
-        elif look[1]:
-            if self.set_image(look[1]):
+            print(f"ai-pet：無法載入 Live2D 模型 {l2d}（{self._l2d_error}），改用預設吉祥物", file=sys.stderr)
+        elif mascot:
+            if self.set_rig(mascot):
                 return
-            print(f"ai-pet：找不到或無法載入圖片 {look[1]}，改用預設吉祥物", file=sys.stderr)
+            print(f"ai-pet：找不到或無法載入造型 {mascot}，改用預設吉祥物", file=sys.stderr)
+        elif image:
+            if self.set_image(image):
+                return
+            print(f"ai-pet：找不到或無法載入圖片 {image}，改用預設吉祥物", file=sys.stderr)
         self.clear_image()
 
     def _watch_config(self) -> None:
@@ -332,6 +344,41 @@ class Manager(QObject):
         self.movie = None
         self.image = None
         self.rig = None
+        if self.l2d is not None:
+            self.l2d.close()  # 釋放 OpenGL 資源；借出去的吉祥物看到 l2d_gen 改變就不再用它
+            self.l2d_gen += 1
+        self.l2d = None
+        self._l2d_lent = False
+
+    def set_live2d(self, model_json: str) -> bool:
+        try:
+            renderer = live2d_model.Live2DRenderer(Path(model_json))
+        except Exception as e:  # 模型格式、OpenGL、函式庫各種錯誤都不能讓吉祥物掛掉
+            self._l2d_error = str(e)
+            return False
+        self.clear_image()
+        self.l2d = renderer
+        self.l2d_gen += 1
+        return True
+
+    def take_renderer(self) -> live2d_model.Live2DRenderer | None:
+        """給一隻吉祥物用的 Live2D 渲染器：主渲染器還沒借出就借它，否則另外建立一個。"""
+        if self.l2d is None:
+            return None
+        if not self._l2d_lent:
+            self._l2d_lent = True
+            return self.l2d
+        try:
+            return live2d_model.Live2DRenderer(self.l2d.source)
+        except Exception as e:
+            print(f"ai-pet：無法建立 Live2D 渲染器：{e}", file=sys.stderr)
+            return None
+
+    def give_back_renderer(self, renderer: live2d_model.Live2DRenderer, gen: int) -> None:
+        if renderer is self.l2d and gen == self.l2d_gen:
+            self._l2d_lent = False
+        elif renderer is not self.l2d:
+            renderer.close()
 
     def set_rig(self, folder: str) -> bool:
         try:
@@ -344,14 +391,21 @@ class Manager(QObject):
 
     def reset_image(self) -> None:
         self.clear_image()
-        self.update_config(image=None, mascot=None)
+        self.update_config(image=None, mascot=None, live2d=None)
 
     def switch_mascot(self, folder: Path, parent: QWidget) -> None:
         if self.set_rig(str(folder)):
-            self.update_config(mascot=str(folder), image=None)
+            self.update_config(mascot=str(folder), image=None, live2d=None)
             self.restart_states()
         else:
             QMessageBox.warning(parent, "AI Pet", f"無法載入這個吉祥物：\n{folder}")
+
+    def switch_live2d(self, model_json: Path, parent: Pet) -> None:
+        if self.set_live2d(str(model_json)):
+            self.update_config(live2d=str(model_json), mascot=None, image=None)
+            self.restart_states()
+        else:
+            parent._message(QMessageBox.Warning, "無法載入這個 Live2D 模型。", f"{model_json}\n\n{self._l2d_error}")
 
     def mascot_folders(self) -> list[tuple[Path, Rig]]:
         """~/.ai-pet/mascots/ 裡可以正常載入的造型，新的在前。"""
@@ -402,13 +456,33 @@ class Manager(QObject):
             self.generator.deleteLater()
         self.generator = None
         if ok and self.set_rig(result):
-            self.update_config(mascot=result, image=None)
+            self.update_config(mascot=result, image=None, live2d=None)
             self.restart_states()
         else:
             box = QMessageBox(QMessageBox.Warning, "AI Pet", "Claude 繪製吉祥物失敗。", parent=self.primary())
             box.setInformativeText(result if not ok else "產生的檔案無法載入。")
             box.setWindowFlag(Qt.WindowStaysOnTopHint)
             box.exec()
+
+    def generate_live2d_motion(self, request: str) -> None:
+        """讓 Claude 依描述產生目前 Live2D 模型資料夾裡的 aipet.json。"""
+        if self.l2d is None or self.generator is not None:
+            return
+        job = Live2DMotionJob(self.l2d.source, request, self.l2d, self)
+        job.finished.connect(self._on_live2d_motion)
+        self.generator = job
+        job.start()
+
+    def _on_live2d_motion(self, ok: bool, result: str) -> None:
+        if self.generator is not None:
+            self.generator.deleteLater()
+        self.generator = None
+        if ok:
+            self.restart_states()  # 渲染器會自動載入新的 aipet.json
+            return
+        pet = self.primary()
+        if pet is not None:
+            pet._message(QMessageBox.Warning, "Claude 產生 Live2D 動作失敗。", result)
 
 
 class Pet(QWidget):
@@ -435,11 +509,31 @@ class Pet(QWidget):
         self.others: list[tuple[str, st.Session]] = []  # 只顯示一隻時：全部 session（新的在前）
         self._drag: QPoint | None = None
         self._placing = False
+        self.l2d: live2d_model.Live2DRenderer | None = None  # 這隻自己的 Live2D 渲染器
+        self._l2d_gen = -1  # 渲染器對應的 mgr.l2d_gen；取得失敗時也記下，同一個模型不再重試
 
         self._save_timer = QTimer(self, singleShot=True, interval=500)
         self._save_timer.timeout.connect(self._save_pos)
         self.place(mgr.slot_pos(slot))
         self.setToolTip("沒有 Claude Code session")
+
+    def _renderer(self) -> live2d_model.Live2DRenderer | None:
+        """目前 Live2D 模型的渲染器；模型換了就歸還舊的、取得新的。"""
+        mgr = self.mgr
+        if self._l2d_gen != mgr.l2d_gen:
+            self._release_renderer()
+            self._l2d_gen = mgr.l2d_gen
+            self.l2d = mgr.take_renderer()
+        return self.l2d
+
+    def _release_renderer(self) -> None:
+        if self.l2d is not None:
+            self.mgr.give_back_renderer(self.l2d, self._l2d_gen)
+        self.l2d = None
+
+    def closeEvent(self, e) -> None:
+        self._release_renderer()
+        super().closeEvent(e)
 
     def set_session(
         self, session: st.Session | None, label: str, others: list[tuple[str, st.Session]] | None = None
@@ -488,7 +582,7 @@ class Pet(QWidget):
         if dlg.choice == "claude":
             self.mgr.generate(Path(path), dlg.actions())
         elif self.mgr.set_image(path):
-            self.mgr.update_config(image=str(Path(path).resolve()), mascot=None)
+            self.mgr.update_config(image=str(Path(path).resolve()), mascot=None, live2d=None)
 
     def _redraw(self) -> None:
         """用同一張原圖重新產生，可以修改動作描述。"""
@@ -499,9 +593,39 @@ class Pet(QWidget):
             return
         actions_file = folder / "actions.txt"
         actions = actions_file.read_text(encoding="utf-8") if actions_file.is_file() else ""
-        dlg = MascotDialog(sources[0], actions, parent=self, allow_plain=False)
+        dlg = MascotDialog(sources[0], actions, parent=self, secondary=None)
         if dlg.exec() and dlg.choice == "claude":
             self.mgr.generate(sources[0], dlg.actions())
+
+    def _edit_live2d_motion(self) -> None:
+        """輸入各狀態想要的動作，讓 Claude 產生模型資料夾裡的 aipet.json。"""
+        mgr = self.mgr
+        if mgr.l2d is None or mgr.generator is not None:
+            return
+        model_json = mgr.l2d.source
+        motion_file = live2d_motion.motion_path(model_json)
+        request = mgr.l2d.motion.request if mgr.l2d.motion else ""
+        try:
+            preview = QPixmap.fromImage(live2d_model.render_portrait(mgr.l2d, 200))
+        except Exception:
+            preview = QPixmap()
+        dlg = MascotDialog(
+            preview,
+            request,
+            parent=self,
+            secondary="還原成內建動作" if motion_file.is_file() else None,
+            primary="用 Claude 產生動作",
+            note=LIVE2D_NOTE,
+            title=f"設定 Live2D 動作：{model_json.parent.name}",
+        )
+        if not dlg.exec():
+            return
+        if dlg.choice == "secondary":
+            # 不直接刪除，改名保留，想要時可以改回來
+            motion_file.replace(motion_file.with_name(motion_file.name + ".bak"))
+            mgr.restart_states()
+            return
+        mgr.generate_live2d_motion(dlg.actions())
 
     def _add_switch_menu(self, menu: QMenu) -> None:
         mgr = self.mgr
@@ -515,7 +639,9 @@ class Pet(QWidget):
 
         default = menu.addAction("預設吉祥物", mgr.reset_image)
         default.setCheckable(True)
-        default.setChecked(mgr.rig is None and mgr.image is None and mgr.movie is None)
+        default.setChecked(
+            mgr.rig is None and mgr.image is None and mgr.movie is None and mgr.l2d is None
+        )
         if mgr.image is not None or mgr.movie is not None:
             img = menu.addAction(f"圖片：{Path(mgr.load_config().get('image', '')).name}")
             img.setCheckable(True)
@@ -547,6 +673,35 @@ class Pet(QWidget):
             hint.setEnabled(False)
         menu.addSeparator()
         menu.addAction("開啟吉祥物資料夾", self._open_mascots_dir)
+        self._add_live2d_items(menu)
+
+    def _add_live2d_items(self, menu: QMenu) -> None:
+        menu.addSeparator()
+        title = menu.addAction("Live2D 模型")
+        title.setEnabled(False)
+        if not live2d_model.available():
+            na = menu.addAction("（未安裝 Live2D 支援）")
+            na.setToolTip(f'需要 live2d-py：pip install "ai-pet[live2d]"\n{live2d_model.import_error()}')
+            na.setEnabled(False)
+            return
+        mgr = self.mgr
+        current = mgr.l2d.source.resolve() if mgr.l2d is not None else None
+        models = live2d_model.find_models()
+        for info in models:
+            act = menu.addAction(QIcon(str(info.icon)) if info.icon else QIcon(), info.name)
+            act.setToolTip(str(info.model_json))
+            act.setCheckable(True)
+            act.setChecked(current is not None and info.model_json.resolve() == current)
+            act.triggered.connect(lambda _=False, m=info.model_json: mgr.switch_live2d(m, self))
+        if not models:
+            hint = menu.addAction("（把 VTube Studio 模型資料夾放進 Live2DModels）")
+            hint.setEnabled(False)
+        menu.addAction("開啟 Live2D 模型資料夾", self._open_live2d_dir)
+
+    def _open_live2d_dir(self) -> None:
+        base = live2d_model.models_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(base)))
 
     def _open_mascots_dir(self) -> None:
         base = st.home() / "mascots"
@@ -651,11 +806,17 @@ class Pet(QWidget):
         menu.addSeparator()
         settings = menu.addMenu("設定")
         if mgr.generator is not None:
-            settings.addAction("取消 Claude 繪製", mgr.cancel_generate)
+            settings.addAction(f"取消（{mgr.generator.label}）", mgr.cancel_generate)
         else:
             settings.addAction("選擇吉祥物圖片…", self._choose_image)
             if mgr.rig is not None:
                 settings.addAction("修改動作並重新繪製…", self._redraw)
+            if mgr.l2d is not None:
+                act = settings.addAction("設定 Live2D 動作…", self._edit_live2d_motion)
+                if mgr.l2d.motion_error:
+                    act.setText("設定 Live2D 動作…（aipet.json 有錯，目前用內建動作）")
+                    act.setToolTip(mgr.l2d.motion_error)
+                    settings.setToolTipsVisible(True)
         self._add_switch_menu(settings.addMenu("切換吉祥物"))
         settings.addSeparator()
         multi = settings.addAction("每個 session 一隻吉祥物")
@@ -719,7 +880,9 @@ class Pet(QWidget):
         foot = GROUND + dy
 
         pix = mgr.movie.currentPixmap() if mgr.movie is not None else mgr.image
-        if mgr.rig is not None:
+        if self._renderer() is not None and self._draw_live2d(p, s, t, ts, dx, dy, sx, sy):
+            pass  # 已經畫好 Live2D 模型
+        elif mgr.rig is not None:
             self._draw_rig(p, s, t, ts, dx, dy, sx, sy)
         elif pix is not None and not pix.isNull():
             self._draw_image(p, pix, s, cx, foot, sx, sy)
@@ -760,24 +923,63 @@ class Pet(QWidget):
         if not self.label:
             return
         f = QFont()
-        f.setPixelSize(10)
+        f.setPixelSize(16)
         p.setFont(f)
         fm = QFontMetrics(f)
         more = f"  +{len(self.others) - 1}" if len(self.others) > 1 else ""  # 只顯示一隻時，其他 session 數
         text = fm.elidedText(self.label, Qt.ElideMiddle, W - 30 - fm.horizontalAdvance(more)) + more
         w = fm.horizontalAdvance(text) + 14
-        r = QRectF((W - w) / 2, GROUND + 6, w, 15)
+        r = QRectF((W - w) / 2, GROUND + 6, w, 22)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(43, 33, 24, 180))
-        p.drawRoundedRect(r, 7, 7)
+        p.drawRoundedRect(r, 11, 11)
         p.setPen(QColor("white"))
         p.drawText(r, Qt.AlignCenter, text)
+
+    def _draw_live2d(
+        self, p: QPainter, s: str, t: float, ts: float, dx: float, dy: float, sx: float, sy: float
+    ) -> bool:
+        """畫 Live2D 模型；失敗時回傳 False，改畫其他造型。"""
+        try:
+            frame = self.l2d.render(s, t, ts, L2D_H * self.devicePixelRatioF())
+        except Exception as e:  # 驅動或模型出錯時改用預設吉祥物，不讓視窗掛掉
+            print(f"ai-pet：Live2D 渲染失敗，改用預設吉祥物：{e}", file=sys.stderr)
+            self.mgr.clear_image()
+            return False
+        if frame is None:
+            return False
+        img, src = frame
+        # 模型等比例縮進顯示範圍，腳底貼地
+        k = min(L2D_W / src.width(), L2D_H / src.height())
+        w, h = src.width() * k, src.height() * k
+        dest = QRectF(W / 2 - w / 2, GROUND - h, w, h)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 45))
+        p.drawEllipse(QPointF(W / 2, GROUND + 2), w * 0.3 * (1 + dy / 50), 4)
+        p.save()
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if s == "offline":
+            p.setOpacity(0.5)
+        # 頭、眼睛、手由模型參數控制；整體的跳躍、抖動、壓扁優先用動作檔的 body，沒有就用內建的
+        body = self.l2d.body(s, t, ts)
+        if body is not None:
+            p.translate(W / 2 + body["x"], GROUND + body["y"])
+            p.rotate(body["rotate"])
+            p.scale(body["scale_x"], body["scale_y"])
+            p.setOpacity(p.opacity() * max(0.0, min(1.0, body["opacity"])))
+        else:
+            p.translate(W / 2 + dx, GROUND + dy)
+            p.scale(sx, sy)
+        p.translate(-W / 2, -GROUND)
+        p.drawImage(dest, img, src)
+        p.restore()
+        return True
 
     def _generating_label(self, p: QPainter, elapsed: float) -> None:
         f = QFont()
         f.setPixelSize(10)
         p.setFont(f)
-        text = f"Claude 繪製新造型中 {int(elapsed) // 60}:{int(elapsed) % 60:02d}"
+        text = f"{self.mgr.generator.label} {int(elapsed) // 60}:{int(elapsed) % 60:02d}"
         fm = QFontMetrics(f)
         w = fm.horizontalAdvance(text) + 14
         r = QRectF((W - w) / 2, H - 17, w, 15)
@@ -946,6 +1148,7 @@ def run() -> None:
     if not lock.tryLock(100):
         print("ai-pet 已經在執行了。", file=sys.stderr)
         sys.exit(1)
+    st.clear_event_log()
     mgr = Manager()
     mgr.start()
     QTimer.singleShot(800, lambda: (pet := mgr.primary()) and pet._offer_hooks())

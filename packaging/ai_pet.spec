@@ -17,10 +17,27 @@ NAME = "AI Pet"
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 icon = str(make_icon(ROOT / "build" / "icon.png"))
 
+# Live2D 是可選功能：打包環境有裝 live2d-py（uv sync --extra live2d）才一起打包
+datas = [
+    (str(ROOT / "src" / "ai_pet" / "mascot_spec.md"), "ai_pet"),
+    (str(ROOT / "src" / "ai_pet" / "live2d_motion_spec.md"), "ai_pet"),
+]
+hiddenimports = []
+try:
+    import live2d  # noqa: F401
+
+    from PyInstaller.utils.hooks import collect_data_files
+
+    datas += collect_data_files("live2d", includes=["FrameworkShaders/*"])
+    hiddenimports.append("live2d")
+    print("AI Pet：包含 Live2D 支援")
+except ImportError:
+    print("AI Pet：沒有安裝 live2d-py，不包含 Live2D 支援")
+
 a = Analysis(
     [str(ROOT / "packaging" / "entry.py")],
     pathex=[str(ROOT / "src")],
-    datas=[(str(ROOT / "src" / "ai_pet" / "mascot_spec.md"), "ai_pet")],
+    datas=datas,
     # 各子指令是在函式內才 import，明確列出比較保險
     hiddenimports=[
         "ai_pet.app",
@@ -29,9 +46,14 @@ a = Analysis(
         "ai_pet.generate",
         "ai_pet.dialogs",
         "ai_pet.rig",
+        "ai_pet.live2d_model",
+        "ai_pet.live2d_motion",
         "PySide6.QtSvg",
+        "PySide6.QtOpenGL",
+        *hiddenimports,
     ],
-    excludes=["tkinter", "unittest", "pydoc", "PIL"],
+    # live2d-py 宣告了 numpy、PyOpenGL 相依，但我們只用到它的 C 擴充，不需要這兩個
+    excludes=["tkinter", "unittest", "pydoc", "PIL", "numpy", "OpenGL", "live2d.v2", "live2d.utils"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

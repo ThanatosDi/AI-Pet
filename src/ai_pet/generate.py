@@ -1,4 +1,9 @@
-"""呼叫 Claude Code（claude -p）把使用者的圖片畫成會動的吉祥物。"""
+"""在背景呼叫 Claude Code（claude -p）產生吉祥物的檔案。
+
+- Generator：把使用者的圖片畫成會動的吉祥物（mascot.svg + rig.json）。
+- Live2DMotionJob：替 Live2D 模型產生各狀態的動作檔（aipet.json）。
+兩者共用 ClaudeJob：執行 claude、驗證產物、有錯時把錯誤交回同一個對話修正。
+"""
 
 from __future__ import annotations
 
@@ -30,11 +35,27 @@ User's wishes for the states (may be empty, may be in Chinese):
 >>>
 """
 
+LIVE2D_PROMPT = """You are writing the animation file for a Live2D model that is used as a desktop pet showing what Claude Code is doing. The current directory contains:
+- `info.json`: the model's parameters (id, author's display name, group, min, max, default).
+- `sheet.png`: the model rendered with each parameter at its min and max. Read it as an image to see what every parameter really does.
+{current_note}
+Read the spec below, then `info.json` and `sheet.png`. Write `aipet.json` in the current directory following the spec. Do not create or modify any other files. Put the user's wishes verbatim in the "request" field. When the file is written, reply with one short line.
+
+<spec>
+{spec}
+</spec>
+
+User's wishes for the states (may be empty, may be in Chinese):
+<<<
+{request}
+>>>
+"""
+
 FIX_PROMPT = """\
 The app validated your files and found these problems:
 {errors}
 
-Fix `mascot.svg` and/or `rig.json` in place so they satisfy the rules, then reply with one short line.
+Fix {files} in place so they satisfy the rules, then reply with one short line.
 """
 
 
@@ -82,15 +103,19 @@ def find_claude() -> str | None:
     return shutil.which("claude", path=search_path())
 
 
-class Generator(QObject):
-    """非同步執行 claude -p；結束時發出 finished(成功與否, 資料夾或錯誤訊息)。"""
+class ClaudeJob(QObject):
+    """非同步執行 claude -p；結束時發出 finished(成功與否, 結果或錯誤訊息)。
+
+    子類別實作 prepare()（建立工作資料夾、回傳 prompt）、validate()（回傳錯誤清單）
+    與 complete()（驗證通過後的收尾，回傳結果字串）。
+    """
 
     finished = Signal(bool, str)
+    label = "Claude 處理中"  # 吉祥物底下顯示的進度文字
+    files = "the files"  # 修正提示裡要 Claude 修的檔案
 
-    def __init__(self, image: Path, actions: str, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
-        self.image = image
-        self.actions = actions.strip()
         self.folder: Path | None = None
         self.started_at = time.monotonic()
         self.attempt = 0
@@ -99,15 +124,26 @@ class Generator(QObject):
         self._timer.timeout.connect(self._on_timeout)
         self._cancelled = False
 
+    def prepare(self) -> str:
+        raise NotImplementedError
+
+    def validate(self) -> list[str]:
+        raise NotImplementedError
+
+    def complete(self) -> str:
+        return str(self.folder)
+
     def start(self) -> None:
         exe = find_claude()
         if exe is None:
             self.finished.emit(False, "找不到 claude 指令，請確認 Claude Code 已安裝並在 PATH 中。")
             return
         self.exe = exe
-        self.folder = new_folder(self.image, self.actions)
-        source = next(self.folder.glob("source.*")).name
-        prompt = PROMPT.format(image=source, spec=spec_text(), actions=self.actions or "(none)")
+        try:
+            prompt = self.prepare()
+        except Exception as e:  # 準備資料失敗（例如 OpenGL 畫對照圖出錯）時直接回報
+            self.finished.emit(False, f"準備資料時發生錯誤：{e}")
+            return
         self._run(prompt)
 
     def cancel(self) -> None:
@@ -171,11 +207,84 @@ class Generator(QObject):
                 self.finished.emit(False, f"claude 結束碼 {code}：{(err or out).strip()[:500]}")
                 return
 
-        errors = rig.validate(self.folder)
+        errors = self.validate()
         if not errors:
-            self.finished.emit(True, str(self.folder))
+            try:
+                self.finished.emit(True, self.complete())
+            except Exception as e:
+                self.finished.emit(False, f"套用結果時發生錯誤：{e}")
         elif self.attempt < MAX_ATTEMPTS and session_id:
-            self._run(FIX_PROMPT.format(errors="\n".join(f"- {e}" for e in errors)), resume=session_id)
+            fix = FIX_PROMPT.format(files=self.files, errors="\n".join(f"- {e}" for e in errors))
+            self._run(fix, resume=session_id)
         else:
             detail = "\n".join(errors[:10])
             self.finished.emit(False, f"產生的檔案驗證失敗：\n{detail}\n\n{result_text}".strip())
+
+
+class Generator(ClaudeJob):
+    """把使用者的圖片畫成 mascot.svg + rig.json。"""
+
+    label = "Claude 繪製新造型中"
+    files = "`mascot.svg` and/or `rig.json`"
+
+    def __init__(self, image: Path, actions: str, parent: QObject | None = None):
+        super().__init__(parent)
+        self.image = image
+        self.actions = actions.strip()
+
+    def prepare(self) -> str:
+        self.folder = new_folder(self.image, self.actions)
+        source = next(self.folder.glob("source.*")).name
+        return PROMPT.format(image=source, spec=spec_text(), actions=self.actions or "(none)")
+
+    def validate(self) -> list[str]:
+        return rig.validate(self.folder)
+
+
+class Live2DMotionJob(ClaudeJob):
+    """替 Live2D 模型產生 aipet.json，通過驗證後放進模型資料夾（原本的檔案會備份）。"""
+
+    label = "Claude 產生動作中"
+    files = "`aipet.json`"
+
+    def __init__(self, model_json: Path, request: str, renderer, parent: QObject | None = None):
+        super().__init__(parent)
+        self.model_json = model_json
+        self.request = request.strip()
+        self.renderer = renderer  # 只在 prepare() 用來畫對照圖
+
+    def prepare(self) -> str:
+        from . import live2d_model, live2d_motion
+
+        base = st.home() / "cache" / "live2d-jobs"
+        self.folder = base / time.strftime("%Y%m%d-%H%M%S")
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self.param_info = dict(self.renderer.param_info)
+        info = self.renderer.info()
+        (self.folder / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+        live2d_model.render_sheet(self.renderer, self.folder / "sheet.png")
+        current = live2d_motion.motion_path(self.model_json)
+        note = ""
+        if current.is_file():
+            shutil.copy2(current, self.folder / "current.json")
+            note = "- `current.json`: the model's current animation file. Start from it and change what the user asks for.\n"
+        return LIVE2D_PROMPT.format(current_note=note, spec=live2d_motion.spec_text(), request=self.request or "(none)")
+
+    def validate(self) -> list[str]:
+        from . import live2d_motion
+
+        path = self.folder / live2d_motion.MOTION_FILE
+        if not path.is_file():
+            return [f"沒有產生 {live2d_motion.MOTION_FILE}"]
+        return live2d_motion.validate(path, self.param_info)
+
+    def complete(self) -> str:
+        from . import live2d_motion
+
+        data = json.loads((self.folder / live2d_motion.MOTION_FILE).read_text(encoding="utf-8"))
+        data["request"] = self.request  # 下次修改動作時當作起點
+        target = live2d_motion.motion_path(self.model_json)
+        if target.is_file():
+            shutil.copy2(target, target.with_name(target.name + ".bak"))
+        target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(self.model_json)
